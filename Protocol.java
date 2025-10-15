@@ -80,12 +80,61 @@ public class Protocol {
 	/* 
 	 * This method read and send the next data segment (dataSeg) to the server. 
 	 * See coursework specification for full details.
-	 *
-	public void readAndSend() { 
-		;
-	}
+	 */
+    public void readAndSend() {
+        try {
+            String line;
+            BufferedReader bufferedReader = new BufferedReader(fileReader); // Read the csv file
+            while ((line = bufferedReader.readLine()) != null)  // Loop through all the lines
+            {
+                String[] parts = line.split(","); // Split the lines by using commas
+                if (parts.length != 5) continue; // Skip invalid information
+                String sensorId = parts[0];
 
-	/* 
+
+                // Take the readings
+                long timestamp = Long.parseLong(parts[1]);
+                float value1 = Float.parseFloat(parts[2]);
+                float value2 = Float.parseFloat(parts[3]);
+                float value3 = Float.parseFloat(parts[4]);
+
+
+                // Make a new reading
+                Reading reading = new Reading (sensorId, timestamp, value1, value2, value3)
+
+
+                // Set up data segment
+                dataSeg.setType(segement.DATA_SIZE); // Customm consant from the segment method
+                dataSeg.setSeqNum(totalSegments % 2); // Alternate between 0 and 1 with the sequence number
+                dataSeg.setReading(Reading); // Attach a reading
+                dataSeg.setFile(outputFileName); // Write back to the output file
+
+
+                // Serialize segment to bytes
+                byte[] sendData = dataSeg.toBytes();
+
+
+                // Create a Udp packet and send
+                DatagramPacket sendPacket = new  DatagramPacket(
+                        sendData,
+                        sendData.length,
+                        ipAddress,
+                        portNumber
+                );
+
+
+                socket.(sendPacket);
+                totalSegments++; // Counting how many have been sent
+
+
+            }
+
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /*
 	 * This method receives the current Ack segment (ackSeg) from the server 
 	 * See coursework specification for full details.
 	 */
