@@ -74,6 +74,24 @@ public class Protocol {
             byte[] segmentBytes = byteStream.toByteArray();
             objectStream.close();
 
+        // Create a Udp packet and send
+        DatagramPacket sendPacket = new  DatagramPacket(
+                sendData,
+                sendData.length,
+                ipAddress,
+                portNumber
+        );
+
+
+        socket.(sendPacket);
+        totalSegments++; // Counting how many have been
+        System.out.println("CLIENT: Sent metadata to server (" + outputFileName + ")");
+
+    } catch (Exception e) {
+        System.out.println("CLIENT: Error sending metadata: " + e.getMessage());
+        e.printStackTrace();
+    }
+
 	}
 
 
