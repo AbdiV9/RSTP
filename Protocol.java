@@ -100,7 +100,6 @@ public class Protocol {
 
 
 
-
     /*
      * This method read and send the next data segment (dataSeg) to the server.
      * See coursework specification for full details.
