@@ -6,6 +6,7 @@ import java.io.File;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -15,11 +16,11 @@ import java.net.DatagramPacket;
 
 public class Protocol {
 
-    static final String  NORMAL_MODE="nm"   ;         // normal transfer mode: (for Part 1 and 2)
-    static final String     TIMEOUT_MODE ="wt"  ;        // timeout transfer mode: (for Part 3)
-    static final String     LOST_MODE ="wl"  ;           // lost Ack transfer mode: (for Part 4)
-    static final int DEFAULT_TIMEOUT =1000  ;         // default timeout in milliseconds (for Part 3)
-    static final int DEFAULT_RETRIES =4  ;            // default number of consecutive retries (for Part 3)
+    static final String NORMAL_MODE = "nm";         // normal transfer mode: (for Part 1 and 2)
+    static final String TIMEOUT_MODE = "wt";        // timeout transfer mode: (for Part 3)
+    static final String LOST_MODE = "wl";           // lost Ack transfer mode: (for Part 4)
+    static final int DEFAULT_TIMEOUT = 1000;         // default timeout in milliseconds (for Part 3)
+    static final int DEFAULT_RETRIES = 4;            // default number of consecutive retries (for Part 3)
     public static final int MAX_Segment_SIZE = 4096;  //the max segment size that can be used when creating the received packet's buffer
 
     /*
@@ -33,11 +34,11 @@ public class Protocol {
     private DatagramSocket socket;      // the socket that the client binds to
 
     private File inputFile;            // the client-side CSV file that has the readings to transfer
-    private String outputFileName ;    // the name of the output file to create on the server to store the readings
+    private String outputFileName;    // the name of the output file to create on the server to store the readings
     private int maxPatchSize;        // the patch size - no of readings to be sent in the payload of a single Data segment
 
-    private Segment dataSeg   ;        // the protocol Data segment for sending Data segments (with payload read from the csv file) to the server
-    private Segment ackSeg  ;          // the protocol Ack segment for receiving ACK segments from the server
+    private Segment dataSeg;        // the protocol Data segment for sending Data segments (with payload read from the csv file) to the server
+    private Segment ackSeg;          // the protocol Ack segment for receiving ACK segments from the server
 
     private int timeout;              // the timeout in milliseconds to use for the protocol with timeout (for Part 3)
     private int maxRetries;           // the maximum number of consecutive retries (retransmissions) to allow before exiting the client (for Part 3)(This is per segment)
@@ -97,9 +98,6 @@ public class Protocol {
     }
 
 
-
-
-
     /*
      * This method read and send the next data segment (dataSeg) to the server.
      * See coursework specification for full details.
@@ -136,15 +134,11 @@ public class Protocol {
     }
 
 
-
-
-
-
     /*
      * This method receives the current Ack segment (ackSeg) from the server
      * See coursework specification for full details.
      */
-    public boolean receiveAck() {
+    public boolean receiveAck() throws java.net.SocketTimeoutException, java.io.IOException {
         try {
             byte[] buffer = new byte[MAX_Segment_SIZE];
             java.net.DatagramPacket packet = new java.net.DatagramPacket(buffer, buffer.length);
@@ -158,7 +152,7 @@ public class Protocol {
             System.out.println("CLIENT: Received ACK from server...");
 
             // Make sure the Ack sequence number matches the Dats segment we sent
-            if (ackSeg.getSeqNum() != dataSeg.getSeqNum()){
+            if (ackSeg.getSeqNum() != dataSeg.getSeqNum()) {
                 System.out.println("CLIENT: Received ACK from server but seq number mismatch");
                 return false;
             }
@@ -172,7 +166,7 @@ public class Protocol {
             // If all readings have been sent end the program
             if (sentReadings >= fileTotalReadings) {
                 System.out.println("CLIENT: All readings have been sent");
-                System.out.println( "CLIENT: Total segement sent is" + totalSegments);
+                System.out.println("CLIENT: Total segement sent is" + totalSegments);
                 System.exit(0);
             }
             return true;
@@ -190,17 +184,74 @@ public class Protocol {
      * This method starts a timer and does re-transmission of the Data segment
      * See coursework specification for full details.
      */
-    public void startTimeoutWithRetransmission()
-    {
+    public void startTimeoutWithRetransmission() {
+        try {
+            // Set timeout for socket (already declared in Protocol.java)
+            socket.setSoTimeout(timeout);
+            currRetry = 0;
+            boolean ackReceived = false;
 
+            System.out.println("CLIENT: Starting timeout protocol for segment " + dataSeg.getSeqNum());
+
+            while (!ackReceived) {
+                try {
+                    // Wait for ACK from server
+                    ackReceived = receiveAck();
+
+                    if (ackReceived) {
+                        System.out.println("CLIENT: ACK received for segment " + dataSeg.getSeqNum());
+                        currRetry = 0; // reset retry counter
+                        break;
+                    }
+
+                } catch (java.net.SocketTimeoutException e) {
+                    currRetry++;
+                    totalSegments++;
+
+                    System.out.println("CLIENT: Timeout (" + timeout + " ms) — retransmitting segment "
+                            + dataSeg.getSeqNum() + " (retry " + currRetry + "/" + maxRetries + ")");
+
+                    // Re-send the same data segment with same sequence number and payload
+                    byte[] data = dataSeg.toString().getBytes();
+                    java.net.DatagramPacket resendPacket =
+                            new java.net.DatagramPacket(data, data.length, ipAddress, portNumber);
+                    socket.send(resendPacket);
+
+                    // Check if we exceeded max retries
+                    if (currRetry > maxRetries) {
+                        System.out.println("CLIENT: Maximum retries (" + maxRetries + ") exceeded. Terminating client.");
+                        socket.close();
+                        System.exit(0);
+                    }
+
+                } catch (java.io.IOException e) {
+                    System.out.println("CLIENT: I/O error while retransmitting data segment.");
+                    e.printStackTrace();
+                    socket.close();
+                    System.exit(0);
+                }
+            }
+
+        } catch (java.net.SocketException e) {
+            System.out.println("CLIENT: Socket error while setting timeout.");
+            e.printStackTrace();
+            System.exit(0);
+
+        } catch (java.io.IOException e) {
+            System.out.println("CLIENT: I/O error during timeout handling.");
+            e.printStackTrace();
+            System.exit(0);
+        }
     }
+
+
 
 
     /*
      * This method is used by the server to receive the Data segment in Lost Ack mode
      * See coursework specification for full details.
      */
-    public void receiveWithAckLoss(DatagramSocket serverSocket, float loss)  {
+    public void receiveWithAckLoss(DatagramSocket serverSocket, float loss) {
         System.exit(0);
     }
 
@@ -215,21 +266,21 @@ public class Protocol {
     /*
      * This method initialises ALL the 14 attributes needed to allow the Protocol methods to work properly
      */
-    public void initProtocol(String hostName , String portNumber, String fileName, String outputFileName, String batchSize) throws UnknownHostException, SocketException {
+    public void initProtocol(String hostName, String portNumber, String fileName, String outputFileName, String batchSize) throws UnknownHostException, SocketException {
         instance.ipAddress = InetAddress.getByName(hostName);
         instance.portNumber = Integer.parseInt(portNumber);
         instance.socket = new DatagramSocket();
 
         instance.inputFile = checkFile(fileName); //check if the CSV file does exist
-        instance.outputFileName =  outputFileName;
-        instance.maxPatchSize= Integer.parseInt(batchSize);
+        instance.outputFileName = outputFileName;
+        instance.maxPatchSize = Integer.parseInt(batchSize);
 
         instance.dataSeg = new Segment(); //initialise the data segment for sending readings to the server
         instance.ackSeg = new Segment();  //initialise the ack segment for receiving Acks from the server
 
         instance.fileTotalReadings = 0;
-        instance.sentReadings=0;
-        instance.totalSegments =0;
+        instance.sentReadings = 0;
+        instance.totalSegments = 0;
 
         instance.timeout = DEFAULT_TIMEOUT;
         instance.maxRetries = DEFAULT_RETRIES;
@@ -240,10 +291,9 @@ public class Protocol {
     /*
      * check if the csv file does exist before sending it
      */
-    private static File checkFile(String fileName)
-    {
+    private static File checkFile(String fileName) {
         File file = new File(fileName);
-        if(!file.exists()) {
+        if (!file.exists()) {
             System.out.println("CLIENT: File does not exists");
             System.out.println("CLIENT: Exit ..");
             System.exit(0);
@@ -254,8 +304,7 @@ public class Protocol {
     /*
      * returns true with the given probability to simulate network errors (Ack loss)(for Part 4)
      */
-    private static Boolean isLost(float prob)
-    {
+    private static Boolean isLost(float prob) {
         double randomValue = Math.random();  //0.0 to 99.9
         return randomValue <= prob;
     }
@@ -298,3 +347,4 @@ public class Protocol {
     public void setCurrRetry(int currRetry) {
         this.currRetry = currRetry;
     }
+}
