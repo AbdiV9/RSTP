@@ -2,14 +2,11 @@
  * Replace the following string of 0s with your student number
  * 000000000
  */
-import java.io.File;
+import java.io.*;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.net.UnknownHostException;
-import java.io.BufferedReader;
-import java.io.FileReader;
-import java.io.IOException;
 import java.net.DatagramPacket;
 
 
@@ -226,7 +223,60 @@ public class Protocol {
      * See coursework specification for full details.
      */
 
-    public void startTimeoutWithRetransmission(){System.exit(0);}
+    public void startTimeoutWithRetransmission(){
+        try {
+            currRetry = 0;
+            boolean  ackReceived = false;
+
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(baos);
+            oos.writeObject(dataSeg);
+            oos.flush();
+            byte[] segBytes = baos.toByteArray();
+
+            while (!ackReceived && receiveAck() ) {
+                java.net.DatagramPacket packet = new java.net.DatagramPacket(segBytes, segBytes.length);
+                socket.send(packet);
+                totalSegments++;
+                System.out.println("CLIENT: Sent DATA segment SeqNum" + dataSeg.getSeqNum() + " (" + totalSegments + " readings)");
+                try {
+                    // Wait for ACK with timeout
+                    socket.setSoTimeout(timeout);
+                    byte[] buffer = new byte[Protocol.MAX_Segment_SIZE];
+                    java.net.DatagramPacket ackPacket = new java.net.DatagramPacket(buffer, buffer.length);
+                    socket.receive(ackPacket);
+
+                    java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(ackPacket.getData());
+                    java.io.ObjectInputStream ois = new java.io.ObjectInputStream(bais);
+                    ackSeg = (Segment) ois.readObject();
+                    ois.close();
+                    bais.close();
+
+                    if (!ackSeg.isValid()) {
+                        System.out.println("CLIENT: Invalid ACK  received.");
+
+                    } else if (ackSeg.getSeqNum() != dataSeg.getSeqNum()) {
+                        System.out.println("CLIENT: Unexpected ACK SeqNum=" + ackSeg.getSeqNum() +
+                                " (Expected " + dataSeg.getSeqNum() + ")");
+                    } else {
+                        System.out.println("CLIENT: ACK received and verified.");
+                        ackReceived = true;
+                        sentReadings += totalSegments;
+                    }
+
+                }
+                catch (java.lang.ClassNotFoundException e) {
+                    System.out.println("CLIENT: Error deserializing ACK: " + e.getMessage());
+                }
+            }
+
+
+
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
 
 
