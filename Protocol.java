@@ -285,7 +285,8 @@ public class Protocol {
      * See coursework specification for full details.
      */
     public void receiveWithAckLoss(DatagramSocket serverSocket, float loss) {
-        System.exit(0);
+
+        byte[] buf = new byte[Protocol.MAX_Segment_SIZE];
     }
 
 
