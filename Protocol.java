@@ -285,9 +285,78 @@ public class Protocol {
      * See coursework specification for full details.
      */
     public void receiveWithAckLoss(DatagramSocket serverSocket, float loss) {
+        try {
+            while (true) {
+                // Receive incoming data segment from the client
+                byte[] buf = new byte[Protocol.MAX_Segment_SIZE];
+                DatagramPacket packet = new DatagramPacket(buf, buf.length);
+                serverSocket.receive(packet);
 
-        byte[] buf = new byte[Protocol.MAX_Segment_SIZE];
+                // Deserialize the received segment
+                ByteArrayInputStream bais = new ByteArrayInputStream(packet.getData());
+                ObjectInputStream ois = new ObjectInputStream(bais);
+                Segment receivedSeg = (Segment) ois.readObject();
+                ois.close();
+                bais.close();
+
+                // Validate received segment
+                if (!receivedSeg.isValid()) {
+                    System.out.println("SERVER: Invalid segment received (checksum error).");
+                    continue;
+                }
+
+                // If it's metadata, initialize server-side file
+                if (receivedSeg.getType() == SegmentType.Meta) {
+                    String[] metaData = receivedSeg.getPayLoad().split(",");
+                    int totalReadings = Integer.parseInt(metaData[0]);
+                    String outputFile = metaData[1];
+                    int patchSize = Integer.parseInt(metaData[2]);
+                    System.out.println("SERVER: Received metadata — totalReadings=" + totalReadings +
+                            ", outputFile=" + outputFile + ", patchSize=" + patchSize);
+                    continue;
+                }
+
+                // Otherwise, assume it's a Data segment
+                System.out.println("SERVER: Received DATA segment SeqNum=" + receivedSeg.getSeqNum());
+
+                // Append data to output file
+                BufferedWriter writer = new BufferedWriter(new FileWriter(getOutputFileName(), true));
+                writer.write(receivedSeg.getPayLoad());
+                writer.close();
+
+                // Simulate ACK loss
+                if (isLost(loss)) {
+                    System.out.println("SERVER: Simulating ACK loss for SeqNum=" + receivedSeg.getSeqNum());
+                    continue; // Skip sending ACK
+                }
+
+                // Build and send ACK segment back to client
+                ackSeg = new Segment(receivedSeg.getSeqNum(), SegmentType.Ack, "ACK", 0);
+
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                ObjectOutputStream oos = new ObjectOutputStream(baos);
+                oos.writeObject(ackSeg);
+                oos.flush();
+                byte[] ackBytes = baos.toByteArray();
+
+                DatagramPacket ackPacket = new DatagramPacket(
+                        ackBytes, ackBytes.length, packet.getAddress(), packet.getPort()
+                );
+                serverSocket.send(ackPacket);
+
+                System.out.println("SERVER: ACK sent for SeqNum=" + receivedSeg.getSeqNum());
+
+                oos.close();
+                baos.close();
+            }
+
+        } catch (IOException e) {
+            System.out.println("SERVER: I/O Error during data receive - " + e.getMessage());
+        } catch (ClassNotFoundException e) {
+            System.out.println("SERVER: Error deserializing data segment - " + e.getMessage());
+        }
     }
+
 
 
     /*************************************************************************************************************************************
