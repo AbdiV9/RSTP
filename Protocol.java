@@ -83,18 +83,19 @@ public class Protocol {
             oos.writeObject(dataSeg);
             oos.flush();
 
-            byte[] metaBytes = baos.toByteArray();
+            byte[] metaBytes = baos.toByteArray(); // Convert segment into bytes
             java.net.DatagramPacket packet = new java.net.DatagramPacket(metaBytes, metaBytes.length, ipAddress, portNumber);
 
             System.out.println("CLIENT: Sending metadata segment to server...");
             socket.send(packet);
-            totalSegments++;
+            totalSegments++; // Increment the total segment count
 
             System.out.println("CLIENT: Metadata sent successfully.");
-
+            // Clean up
             oos.close();
             baos.close();
         } catch (java.io.IOException e) {
+            // Handling the IOException that may occur during file handling
             System.out.println("CLIENT: Error sending metadata - " + e.getMessage());
             if (socket != null && !socket.isClosed()) socket.close();
         }
@@ -115,11 +116,11 @@ public class Protocol {
             int seqNum = 1; // Sequence starts at 1 (0 = metadata)
 
             System.out.println("CLIENT: Beginning data transmission...");
-
+            // Read the file line by line
             while ((line = reader.readLine()) != null) {
                 batch.append(line).append("\n");
                 count++;
-
+                // If the batch reaches the max patch size or we have reached the end of the file, send the segment
                 if (count == maxPatchSize || sentReadings + count == fileTotalReadings) {
                     // Build Data segment
                     dataSeg = new Segment(seqNum, SegmentType.Data, batch.toString(), count);
@@ -130,7 +131,7 @@ public class Protocol {
                     oos.writeObject(dataSeg);
                     oos.flush();
 
-                    byte[] segBytes = baos.toByteArray();
+                    byte[] segBytes = baos.toByteArray(); // Convert to byte array for transmission
                     java.net.DatagramPacket packet = new java.net.DatagramPacket(segBytes, segBytes.length, ipAddress, portNumber);
                     socket.send(packet);
                     totalSegments++;
@@ -223,10 +224,10 @@ public class Protocol {
      * See coursework specification for full details.
      */
 
-    public void startTimeoutWithRetransmission(){
+    public void startTimeoutWithRetransmission() {
         try {
-            currRetry = 0;
-            boolean  ackReceived = false;
+            currRetry = 0;  // Reset retry count
+            boolean ackReceived = false;
 
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             java.io.ObjectOutputStream oos = new java.io.ObjectOutputStream(baos);
@@ -234,11 +235,12 @@ public class Protocol {
             oos.flush();
             byte[] segBytes = baos.toByteArray();
 
-            while (!ackReceived && receiveAck() ) {
+            while (!ackReceived && currRetry < maxRetries) {
                 java.net.DatagramPacket packet = new java.net.DatagramPacket(segBytes, segBytes.length);
                 socket.send(packet);
                 totalSegments++;
-                System.out.println("CLIENT: Sent DATA segment SeqNum" + dataSeg.getSeqNum() + " (" + totalSegments + " readings)");
+                System.out.println("CLIENT: Sent DATA segment SeqNum " + dataSeg.getSeqNum() + " (" + totalSegments + " readings)");
+
                 try {
                     // Wait for ACK with timeout
                     socket.setSoTimeout(timeout);
@@ -246,6 +248,7 @@ public class Protocol {
                     java.net.DatagramPacket ackPacket = new java.net.DatagramPacket(buffer, buffer.length);
                     socket.receive(ackPacket);
 
+                    // Deserialize and process the ACK
                     java.io.ByteArrayInputStream bais = new java.io.ByteArrayInputStream(ackPacket.getData());
                     java.io.ObjectInputStream ois = new java.io.ObjectInputStream(bais);
                     ackSeg = (Segment) ois.readObject();
@@ -253,8 +256,7 @@ public class Protocol {
                     bais.close();
 
                     if (!ackSeg.isValid()) {
-                        System.out.println("CLIENT: Invalid ACK  received.");
-
+                        System.out.println("CLIENT: Invalid ACK received.");
                     } else if (ackSeg.getSeqNum() != dataSeg.getSeqNum()) {
                         System.out.println("CLIENT: Unexpected ACK SeqNum=" + ackSeg.getSeqNum() +
                                 " (Expected " + dataSeg.getSeqNum() + ")");
@@ -264,20 +266,24 @@ public class Protocol {
                         sentReadings += totalSegments;
                     }
 
-                }
-                catch (java.lang.ClassNotFoundException e) {
+                } catch (java.net.SocketTimeoutException e) {
+                    // Timeout occurred, increment retry count and retransmit
+                    currRetry++;
+                    System.out.println("CLIENT: Timeout, retrying... (Retry count: " + currRetry + ")");
+                } catch (java.lang.ClassNotFoundException e) {
                     System.out.println("CLIENT: Error deserializing ACK: " + e.getMessage());
                 }
+
+                if (currRetry >= maxRetries) {
+                    System.out.println("CLIENT: Max retries reached. Terminating.");
+                    break;
+                }
             }
-
-
-
 
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
-
 
 
     /*
@@ -286,8 +292,14 @@ public class Protocol {
      */
     public void receiveWithAckLoss(DatagramSocket serverSocket, float loss) {
         try {
+            int expectedSeqNum = 1;  // Start expecting sequence number 1 (after metadata)
+            int totalReceivedBytes = 0;
+            int totalUsefulBytes = 0;
+            Segment lastValidSeg = null;  // To store the last valid Data segment
+
+            long startTime = System.currentTimeMillis();  // Start time for timeout detection
+
             while (true) {
-                // Receive incoming data segment from the client
                 byte[] buf = new byte[Protocol.MAX_Segment_SIZE];
                 DatagramPacket packet = new DatagramPacket(buf, buf.length);
                 serverSocket.receive(packet);
@@ -302,10 +314,10 @@ public class Protocol {
                 // Validate received segment
                 if (!receivedSeg.isValid()) {
                     System.out.println("SERVER: Invalid segment received (checksum error).");
-                    continue;
+                    continue;  // Skip invalid segments
                 }
 
-                // If it's metadata, initialize server-side file
+                // If it's metadata, initialize server-side file (handled only once)
                 if (receivedSeg.getType() == SegmentType.Meta) {
                     String[] metaData = receivedSeg.getPayLoad().split(",");
                     int totalReadings = Integer.parseInt(metaData[0]);
@@ -313,42 +325,96 @@ public class Protocol {
                     int patchSize = Integer.parseInt(metaData[2]);
                     System.out.println("SERVER: Received metadata — totalReadings=" + totalReadings +
                             ", outputFile=" + outputFile + ", patchSize=" + patchSize);
-                    continue;
+                    continue;  // Skip metadata processing after the first one
                 }
 
                 // Otherwise, assume it's a Data segment
                 System.out.println("SERVER: Received DATA segment SeqNum=" + receivedSeg.getSeqNum());
 
-                // Append data to output file
-                BufferedWriter writer = new BufferedWriter(new FileWriter(getOutputFileName(), true));
-                writer.write(receivedSeg.getPayLoad());
-                writer.close();
+                // Check if the received segment's sequence number is what we expect
+                if (receivedSeg.getSeqNum() == expectedSeqNum) {
+                    // Valid, new segment: process it
+                    System.out.println("SERVER: Processing new Data segment");
 
-                // Simulate ACK loss
-                if (isLost(loss)) {
-                    System.out.println("SERVER: Simulating ACK loss for SeqNum=" + receivedSeg.getSeqNum());
-                    continue; // Skip sending ACK
+                    // Append data to output file
+                    BufferedWriter writer = new BufferedWriter(new FileWriter(getOutputFileName(), true));
+                    writer.write(receivedSeg.getPayLoad());
+                    writer.close();
+
+                    // Update total useful data bytes
+                    totalReceivedBytes += receivedSeg.getPayLoad().length();
+                    totalUsefulBytes += receivedSeg.getPayLoad().length();
+
+                    // Update the last valid segment
+                    lastValidSeg = receivedSeg;
+
+                    // Increment expected sequence number for the next segment
+                    expectedSeqNum++;
+
+                    // Simulate ACK loss (may not send ACK for this segment)
+                    if (isLost(loss)) {
+                        System.out.println("SERVER: Simulating ACK loss for SeqNum=" + receivedSeg.getSeqNum());
+                        continue; // Skip sending ACK (simulate loss)
+                    }
+
+                    // Send ACK for successfully received segment (without new method)
+                    // Serialize the ACK segment
+                    ackSeg = new Segment(receivedSeg.getSeqNum(), SegmentType.Ack, "ACK", 0);
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    ObjectOutputStream oos = new ObjectOutputStream(baos);
+                    oos.writeObject(ackSeg);
+                    oos.flush();
+                    byte[] ackBytes = baos.toByteArray();
+
+                    // Create and send the ACK packet
+                    DatagramPacket ackPacket = new DatagramPacket(
+                            ackBytes, ackBytes.length, packet.getAddress(), packet.getPort()
+                    );
+                    serverSocket.send(ackPacket);
+                    oos.close();
+                    baos.close();
+
+                    System.out.println("SERVER: ACK sent for SeqNum=" + receivedSeg.getSeqNum());
+
+                } else if (receivedSeg.getSeqNum() < expectedSeqNum) {
+                    // Duplicate segment: resend the last valid ACK
+                    System.out.println("SERVER: Duplicate segment received (SeqNum=" + receivedSeg.getSeqNum() +
+                            "). Resending ACK for last valid segment.");
+
+                    // Serialize and send the ACK for the last valid segment
+                    ackSeg = new Segment(lastValidSeg.getSeqNum(), SegmentType.Ack, "ACK", 0);
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    ObjectOutputStream oos = new ObjectOutputStream(baos);
+                    oos.writeObject(ackSeg);
+                    oos.flush();
+                    byte[] ackBytes = baos.toByteArray();
+
+                    // Create and send the ACK packet
+                    DatagramPacket ackPacket = new DatagramPacket(
+                            ackBytes, ackBytes.length, packet.getAddress(), packet.getPort()
+                    );
+                    serverSocket.send(ackPacket);
+                    oos.close();
+                    baos.close();
+
+                    System.out.println("SERVER: Resending ACK for SeqNum=" + lastValidSeg.getSeqNum());
+
+                } else {
+                    // Unexpected sequence number: wait for the correct segment
+                    System.out.println("SERVER: Received out-of-order Data segment (SeqNum=" + receivedSeg.getSeqNum() +
+                            "). Ignoring it and waiting for SeqNum=" + expectedSeqNum);
                 }
 
-                // Build and send ACK segment back to client
-                ackSeg = new Segment(receivedSeg.getSeqNum(), SegmentType.Ack, "ACK", 0);
-
-                ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                ObjectOutputStream oos = new ObjectOutputStream(baos);
-                oos.writeObject(ackSeg);
-                oos.flush();
-                byte[] ackBytes = baos.toByteArray();
-
-                DatagramPacket ackPacket = new DatagramPacket(
-                        ackBytes, ackBytes.length, packet.getAddress(), packet.getPort()
-                );
-                serverSocket.send(ackPacket);
-
-                System.out.println("SERVER: ACK sent for SeqNum=" + receivedSeg.getSeqNum());
-
-                oos.close();
-                baos.close();
+                // Timeout: Exit after waiting for 2000ms if no valid segment is received
+                if (System.currentTimeMillis() - startTime > 2000) {
+                    System.out.println("SERVER: Timeout reached. Exiting.");
+                    break;
+                }
             }
+
+            // Calculate efficiency
+            double efficiency = ((double) totalUsefulBytes / totalReceivedBytes) * 100;
+            System.out.println("SERVER: Transfer efficiency: " + efficiency + "%");
 
         } catch (IOException e) {
             System.out.println("SERVER: I/O Error during data receive - " + e.getMessage());
@@ -356,6 +422,7 @@ public class Protocol {
             System.out.println("SERVER: Error deserializing data segment - " + e.getMessage());
         }
     }
+
 
 
 
